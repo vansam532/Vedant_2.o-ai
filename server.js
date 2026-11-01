@@ -25,7 +25,7 @@ const limiter = rateLimit({
 });
 
 async function verifySupabaseUser(req) {
-  const token = (req.headers.authorization || "").replace(/^Bearer\\s+/i, "");
+  const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
   if (!token || !process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) return null;
   const response = await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`, {
     headers: { apikey: process.env.SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` }
