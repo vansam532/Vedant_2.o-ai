@@ -28,6 +28,17 @@ const limiter = rateLimit({
   message: { error: "Too many AI requests. Please wait a minute." }
 });
 
+// Live India date and time
+function getIndiaDateTime() {
+  const now = new Date();
+
+  return new Intl.DateTimeFormat("hi-IN", {
+    timeZone: "Asia/Kolkata",
+    dateStyle: "full",
+    timeStyle: "long"
+  }).format(now);
+}
+
 async function verifySupabaseUser(req) {
   const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
 
@@ -56,10 +67,21 @@ app.get("/api/health", (_req, res) => {
     name: "VEDANT AI",
     provider: "Groq",
     model: MODEL,
+    indiaTime: getIndiaDateTime(),
     aiConfigured: Boolean(process.env.GROQ_API_KEY),
     databaseConfigured: Boolean(
       process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY
     )
+  });
+});
+
+// Current India time API
+app.get("/api/time", (_req, res) => {
+  res.json({
+    country: "India",
+    timezone: "Asia/Kolkata",
+    time: getIndiaDateTime(),
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -91,18 +113,32 @@ app.post("/api/ai/chat", limiter, async (req, res) => {
       }
     }
 
-    // GPT-OSS 120B is a text model.
+    // Current model supports text chat only
     if (attachment?.data) {
       return res.status(415).json({
         error: "This AI model currently supports text chat only. File and image analysis are not enabled."
       });
     }
 
+    // Get fresh India time for every AI request
+    const indiaTime = getIndiaDateTime();
+
     const messages = [
       {
         role: "system",
-        content:
-          "You are VEDANT AI, a helpful assistant for education, skill development, creativity and business management. Reply in the language used by the user (Hindi or English). Be practical, structured and honest. Never claim certainty when unsure."
+        content: `You are VEDANT AI, a helpful assistant for education, skill development, creativity and business management.
+
+CURRENT LIVE INDIA DATE AND TIME:
+${indiaTime}
+
+TIME RULES:
+1. If the user asks for the current time in India, give the exact time from the information above.
+2. If the user asks for today's date or day, use the information above.
+3. Answer time questions directly and briefly.
+4. Never invent or guess the current time.
+5. India uses Asia/Kolkata timezone (IST, UTC+5:30).
+6. Reply in the language used by the user (Hindi or English).
+7. Be practical, structured and honest.`
       }
     ];
 
@@ -209,4 +245,3 @@ if (process.env.NODE_ENV === "production") {
 app.listen(PORT, () => {
   console.log(`VEDANT AI server listening on ${PORT}`);
 });
-      
