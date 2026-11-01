@@ -143,7 +143,7 @@ async function askAI(text,file){
   if(file&&file.size>15*1024*1024)return toast("File size 15 MB से कम रखें।",true);
   const userText=text||`Please analyze the attached file: ${file.name}`;
   state.chat.push({role:"user",text:userText});state.chatBusy=true;go("assistant");
-  const box=$("#chatMessages");box.insertAdjacentHTML("beforeend",chatBubble(userText,"user")+chatBubble("सोच रहा हूँ…","model"));box.scrollTop=box.scrollHeight;
+  const box=$("#chatMessages");box.insertAdjacentHTML("beforeend",chatBubble("सोच रहा हूँ…","model"));box.scrollTop=box.scrollHeight;
   $("#aiSend").disabled=true;
   try{
     let attachment=null;
