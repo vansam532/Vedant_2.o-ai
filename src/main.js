@@ -82,7 +82,7 @@ function playIntro() {
 
   video.src = "/vedant-intro.mp4";
   video.autoplay = true;
-  video.muted = true;
+  video.unmuted = true;
   video.playsInline = true;
   video.preload = "auto";
   video.controls = false;
