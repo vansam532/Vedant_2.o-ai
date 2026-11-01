@@ -11,7 +11,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 
-const MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+const MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 const REQUEST_TIMEOUT = 60000;
 
 app.disable("x-powered-by");
@@ -54,9 +54,9 @@ app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
     name: "VEDANT AI",
-    provider: "OpenAI",
+    provider: "Groq",
     model: MODEL,
-    aiConfigured: Boolean(process.env.OPENAI_API_KEY),
+    aiConfigured: Boolean(process.env.GROQ_API_KEY),
     databaseConfigured: Boolean(
       process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY
     )
@@ -75,9 +75,9 @@ app.post("/api/ai/chat", limiter, async (req, res) => {
       return res.status(413).json({ error: "Message is too long." });
     }
 
-    if (!process.env.OPENAI_API_KEY) {
+    if (!process.env.GROQ_API_KEY) {
       return res.status(503).json({
-        error: "OpenAI API key is not configured on the server."
+        error: "Groq API key is not configured on the server."
       });
     }
 
@@ -91,72 +91,39 @@ app.post("/api/ai/chat", limiter, async (req, res) => {
       }
     }
 
-    const input = [];
-
-    for (const item of Array.isArray(history) ? history.slice(-10) : []) {
-      if (
-        !["user", "assistant"].includes(item.role) ||
-        typeof item.text !== "string"
-      ) continue;
-
-      input.push({
-        role: item.role,
-        content: [{
-          type: "input_text",
-          text: item.text.slice(0, 4000)
-        }]
+    // GPT-OSS 120B is a text model.
+    if (attachment?.data) {
+      return res.status(415).json({
+        error: "This AI model currently supports text chat only. File and image analysis are not enabled."
       });
     }
 
-    const content = [{
-      type: "input_text",
-      text: message.trim()
-    }];
-
-    if (attachment?.data && attachment?.mimeType) {
-      const allowed = [
-        "application/pdf",
-        "image/jpeg",
-        "image/png",
-        "image/webp",
-        "image/gif"
-      ];
-
-      if (!allowed.includes(attachment.mimeType)) {
-        return res.status(415).json({
-          error: "Supported attachments: PDF, JPG, PNG, WEBP and GIF."
-        });
+    const messages = [
+      {
+        role: "system",
+        content:
+          "You are VEDANT AI, a helpful assistant for education, skill development, creativity and business management. Reply in the language used by the user (Hindi or English). Be practical, structured and honest. Never claim certainty when unsure."
       }
+    ];
 
-      if (
-        typeof attachment.data !== "string" ||
-        attachment.data.length > 18 * 1024 * 1024
-      ) {
-        return res.status(413).json({
-          error: "Attachment is too large. Maximum is 18 MB."
-        });
-      }
+    for (const item of Array.isArray(history) ? history.slice(-10) : []) {
+      if (typeof item.text !== "string") continue;
 
-      const dataUrl = `data:${attachment.mimeType};base64,${attachment.data}`;
+      let role = item.role;
 
-      if (attachment.mimeType === "application/pdf") {
-        content.push({
-          type: "input_file",
-          filename: "attachment.pdf",
-          file_data: dataUrl
-        });
-      } else {
-        content.push({
-          type: "input_image",
-          image_url: dataUrl,
-          detail: "auto"
-        });
-      }
+      if (role === "model") role = "assistant";
+
+      if (!["user", "assistant"].includes(role)) continue;
+
+      messages.push({
+        role,
+        content: item.text.slice(0, 4000)
+      });
     }
 
-    input.push({
+    messages.push({
       role: "user",
-      content
+      content: message.trim()
     });
 
     const controller = new AbortController();
@@ -165,21 +132,22 @@ app.post("/api/ai/chat", limiter, async (req, res) => {
     let response;
 
     try {
-      response = await fetch("https://api.openai.com/v1/responses", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
-        },
-        body: JSON.stringify({
-          model: MODEL,
-          instructions:
-            "You are VEDANT AI, a helpful assistant for education, skill development, creativity and business management. Reply in the language used by the user (Hindi or English). Be practical, structured and honest. Never claim certainty when unsure.",
-          input,
-          max_output_tokens: 2048
-        }),
-        signal: controller.signal
-      });
+      response = await fetch(
+        "https://api.groq.com/openai/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${process.env.GROQ_API_KEY}`
+          },
+          body: JSON.stringify({
+            model: MODEL,
+            messages,
+            max_completion_tokens: 2048
+          }),
+          signal: controller.signal
+        }
+      );
     } finally {
       clearTimeout(timeout);
     }
@@ -188,21 +156,16 @@ app.post("/api/ai/chat", limiter, async (req, res) => {
 
     if (!response.ok) {
       console.error(
-        "OpenAI API error:",
+        "Groq API error:",
         payload?.error?.message || response.status
       );
 
       return res.status(response.status === 429 ? 429 : 502).json({
-        error: payload?.error?.message || "OpenAI request failed."
+        error: payload?.error?.message || "Groq AI request failed."
       });
     }
 
-    const reply = (payload.output || [])
-      .flatMap(item => item.content || [])
-      .filter(item => item.type === "output_text")
-      .map(item => item.text || "")
-      .join("")
-      .trim();
+    const reply = payload?.choices?.[0]?.message?.content?.trim();
 
     if (!reply) {
       return res.status(502).json({
@@ -210,7 +173,11 @@ app.post("/api/ai/chat", limiter, async (req, res) => {
       });
     }
 
-    return res.json({ reply, model: MODEL });
+    return res.json({
+      reply,
+      model: MODEL,
+      provider: "Groq"
+    });
 
   } catch (error) {
     console.error("AI route error:", error?.message || error);
@@ -242,3 +209,4 @@ if (process.env.NODE_ENV === "production") {
 app.listen(PORT, () => {
   console.log(`VEDANT AI server listening on ${PORT}`);
 });
+      
