@@ -10,9 +10,9 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
-const MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
 
-const REQUEST_TIMEOUT = 45000;
+const MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+const REQUEST_TIMEOUT = 60000;
 
 app.disable("x-powered-by");
 app.use(helmet({ contentSecurityPolicy: false }));
@@ -54,8 +54,9 @@ app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
     name: "VEDANT AI",
+    provider: "OpenAI",
     model: MODEL,
-    aiConfigured: Boolean(process.env.GEMINI_API_KEY),
+    aiConfigured: Boolean(process.env.OPENAI_API_KEY),
     databaseConfigured: Boolean(
       process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY
     )
@@ -74,14 +75,15 @@ app.post("/api/ai/chat", limiter, async (req, res) => {
       return res.status(413).json({ error: "Message is too long." });
     }
 
-    if (!process.env.GEMINI_API_KEY) {
+    if (!process.env.OPENAI_API_KEY) {
       return res.status(503).json({
-        error: "Gemini API key is not configured on the server."
+        error: "OpenAI API key is not configured on the server."
       });
     }
 
     if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
       const user = await verifySupabaseUser(req);
+
       if (!user?.id) {
         return res.status(401).json({
           error: "Please sign in to use VEDANT AI."
@@ -89,21 +91,27 @@ app.post("/api/ai/chat", limiter, async (req, res) => {
       }
     }
 
-    const contents = [];
+    const input = [];
 
     for (const item of Array.isArray(history) ? history.slice(-10) : []) {
       if (
-        !["user", "model"].includes(item.role) ||
+        !["user", "assistant"].includes(item.role) ||
         typeof item.text !== "string"
       ) continue;
 
-      contents.push({
+      input.push({
         role: item.role,
-        parts: [{ text: item.text.slice(0, 4000) }]
+        content: [{
+          type: "input_text",
+          text: item.text.slice(0, 4000)
+        }]
       });
     }
 
-    const parts = [{ text: message.trim() }];
+    const content = [{
+      type: "input_text",
+      text: message.trim()
+    }];
 
     if (attachment?.data && attachment?.mimeType) {
       const allowed = [
@@ -120,57 +128,58 @@ app.post("/api/ai/chat", limiter, async (req, res) => {
         });
       }
 
-      if (attachment.data.length > 18 * 1024 * 1024) {
+      if (
+        typeof attachment.data !== "string" ||
+        attachment.data.length > 18 * 1024 * 1024
+      ) {
         return res.status(413).json({
           error: "Attachment is too large. Maximum is 18 MB."
         });
       }
 
-      parts.push({
-        inlineData: {
-          mimeType: attachment.mimeType,
-          data: attachment.data
-        }
-      });
+      const dataUrl = `data:${attachment.mimeType};base64,${attachment.data}`;
+
+      if (attachment.mimeType === "application/pdf") {
+        content.push({
+          type: "input_file",
+          filename: "attachment.pdf",
+          file_data: dataUrl
+        });
+      } else {
+        content.push({
+          type: "input_image",
+          image_url: dataUrl,
+          detail: "auto"
+        });
+      }
     }
 
-    contents.push({ role: "user", parts });
+    input.push({
+      role: "user",
+      content
+    });
 
     const controller = new AbortController();
-    const timeout = setTimeout(
-      () => controller.abort(),
-      REQUEST_TIMEOUT
-    );
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
 
     let response;
 
     try {
-      response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(MODEL)}:generateContent`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-goog-api-key": process.env.GEMINI_API_KEY
-          },
-          body: JSON.stringify({
-            systemInstruction: {
-              parts: [{
-                text: "You are VEDANT AI, a helpful assistant for education, skill development, creativity and business management. Reply in the language used by the user (Hindi or English). Be practical, structured and honest. Never claim certainty when unsure."
-              }]
-            },
-            contents,
-            generationConfig: {
-              temperature: 0.7,
-              maxOutputTokens: 2048,
-              thinkingConfig: {
-                thinkingLevel: "low"
-              }
-            }
-          }),
-          signal: controller.signal
-        }
-      );
+      response = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: MODEL,
+          instructions:
+            "You are VEDANT AI, a helpful assistant for education, skill development, creativity and business management. Reply in the language used by the user (Hindi or English). Be practical, structured and honest. Never claim certainty when unsure.",
+          input,
+          max_output_tokens: 2048
+        }),
+        signal: controller.signal
+      });
     } finally {
       clearTimeout(timeout);
     }
@@ -179,17 +188,19 @@ app.post("/api/ai/chat", limiter, async (req, res) => {
 
     if (!response.ok) {
       console.error(
-        "Gemini API error:",
+        "OpenAI API error:",
         payload?.error?.message || response.status
       );
 
       return res.status(response.status === 429 ? 429 : 502).json({
-        error: payload?.error?.message || "AI provider request failed."
+        error: payload?.error?.message || "OpenAI request failed."
       });
     }
 
-    const reply = payload?.candidates?.[0]?.content?.parts
-      ?.map(part => part.text || "")
+    const reply = (payload.output || [])
+      .flatMap(item => item.content || [])
+      .filter(item => item.type === "output_text")
+      .map(item => item.text || "")
       .join("")
       .trim();
 
@@ -231,4 +242,3 @@ if (process.env.NODE_ENV === "production") {
 app.listen(PORT, () => {
   console.log(`VEDANT AI server listening on ${PORT}`);
 });
-          
