@@ -1,0 +1,10 @@
+{
+  "name": "VEDANT AI",
+  "short_name": "VEDANT AI",
+  "description": "Learn · Create · Grow",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b1020",
+  "theme_color": "#101426",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
